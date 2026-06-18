@@ -1,17 +1,13 @@
-// Global State Management
-let products = [...INITIAL_PRODUCTS];
+// Global Configuration for Cloud Database
+const JSONBIN_API_KEY = "6a347cdfa8b6024c76258e74"; // আপনার বিন কোড / অ্যাক্সেস কী
+const JSONBIN_BIN_ID = "6a348041f5f4af5e290be899";  // আপনার আসল বিন আইডি
+
+let products = [];
 let cart = [];
 let orders = [];
 
-// Local Storage Setup
-function initDatabase() {
-  const localProducts = localStorage.getItem('fm_products');
-  if (localProducts) {
-    products = JSON.parse(localProducts);
-  } else {
-    localStorage.setItem('fm_products', JSON.stringify(INITIAL_PRODUCTS));
-  }
-
+// Initialize Local/Cloud Database
+async function initDatabase() {
   const localCart = localStorage.getItem('fm_cart');
   if (localCart) {
     cart = JSON.parse(localCart);
@@ -36,11 +32,42 @@ function initDatabase() {
     ];
     localStorage.setItem('fm_orders', JSON.stringify(orders));
   }
+
+  // Load Products from Cloud Database (Real-time Sync)
+  try {
+    const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
+      headers: {
+        'X-Master-Key': JSONBIN_API_KEY
+      }
+    });
+    const data = await response.json();
+    products = data.record;
+  } catch (error) {
+    console.warn("Cloud Database load failed, using fallback static data.", error);
+    if (typeof INITIAL_PRODUCTS !== 'undefined') {
+      products = [...INITIAL_PRODUCTS];
+    }
+  }
+
   updateGlobalCartCounters();
+  router();
 }
 
-function saveProductsToLocal() {
-  localStorage.setItem('fm_products', JSON.stringify(products));
+// Save Products to Cloud Database (Sync across all devices)
+async function saveProductsToCloud() {
+  try {
+    await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Master-Key': JSONBIN_API_KEY
+      },
+      body: JSON.stringify(products)
+    });
+    console.log("Database successfully synced to cloud.");
+  } catch (error) {
+    console.error("Cloud sync failed.", error);
+  }
 }
 
 function saveCartToLocal() {
@@ -54,15 +81,16 @@ function saveOrdersToLocal() {
 
 function updateGlobalCartCounters() {
   const count = cart.reduce((total, item) => total + item.qty, 0);
-  document.getElementById('cart-counter').innerText = count;
-  document.getElementById('mobile-cart-counter').innerText = count;
+  const counter = document.getElementById('cart-counter');
+  const mobCounter = document.getElementById('mobile-cart-counter');
+  if (counter) counter.innerText = count;
+  if (mobCounter) mobCounter.innerText = count;
 }
 
 // Router Management
 window.addEventListener('hashchange', router);
 window.addEventListener('load', () => {
   initDatabase();
-  router();
   document.getElementById('current-year').innerText = new Date().getFullYear();
 });
 
@@ -78,7 +106,8 @@ document.getElementById('global-search-form').addEventListener('submit', functio
 function router() {
   const hash = window.location.hash || '#/';
   const appViewport = document.getElementById('app-viewport');
-  
+  if (!appViewport) return;
+
   document.querySelectorAll('.nav-link, .mobile-nav-item').forEach(link => {
     link.classList.remove('active');
     if (link.getAttribute('href') === hash) {
@@ -117,7 +146,6 @@ function router() {
   } else {
     appViewport.innerHTML = `<div class="container section-padding text-center"><h2>পৃষ্ঠাটি পাওয়া যায়নি</h2><a href="#/" class="btn-royal mt-3">হোম পেজে ফিরে যান</a></div>`;
   }
-  window.scrollTo(0,0);
 }
 
 /* =======================================
@@ -310,7 +338,27 @@ function updateDetailsQty(diff) {
 
 function addCurrentProductToCart(id) {
   const qty = parseInt(document.getElementById('details-qty-input').value) || 1;
-  addToCart(id, qty);
+  addCurrentProductToCartWithQty(id, qty);
+}
+
+function addCurrentProductToCartWithQty(id, qty) {
+  const product = products.find(p => p.id === id);
+  if (!product) return;
+
+  const existing = cart.find(item => item.id === id);
+  if (existing) {
+    existing.qty += qty;
+  } else {
+    cart.push({
+      id: product.id,
+      name: product.name,
+      price: product.price,
+      image: product.images[0],
+      qty: qty
+    });
+  }
+  saveCartToLocal();
+  alert("সাফল্যের সাথে কার্টে যুক্ত হয়েছে।");
 }
 
 // Shopping Cart Code
@@ -799,7 +847,7 @@ function openAddProductModal() {
     </div>
   `;
 
-  document.getElementById('new-prod-form').addEventListener('submit', function(e) {
+  document.getElementById('new-prod-form').addEventListener('submit', async function(e) {
     e.preventDefault();
     const name = document.getElementById('new-p-name').value;
     const brand = document.getElementById('new-p-brand').value;
@@ -818,12 +866,11 @@ function openAddProductModal() {
     };
 
     products.push(newProd);
-    saveProductsToLocal();
+    await saveProductsToCloud();
     loadAdminProductsView();
   });
 }
 
-// UNLOCKED: Open Edit Product Form - Picture & everything is now completely editable
 function openEditProductForm(id) {
   const item = products.find(p => p.id === id);
   if (!item) return;
@@ -851,7 +898,7 @@ function openEditProductForm(id) {
             <input type="text" id="edit-p-cat" class="form-control" value="${item.category}" required>
           </div>
           <div class="form-group">
-            <label>ছবি লিঙ্ক (ImgBB বা অন্যান্য লিঙ্ক এখানে পেস্ট করুন) *</label>
+            <label>ছবি লিঙ্ক (ImgBB লিঙ্ক এখানে পেস্ট করুন) *</label>
             <input type="text" id="edit-p-img" class="form-control" value="${item.images[0]}" required>
           </div>
           <div class="form-group">
@@ -870,7 +917,7 @@ function openEditProductForm(id) {
         </div>
 
         <div class="form-group">
-          <label>স্পেসিফিকেশন ও ফিচারসমূহ (প্রতি লাইনে একটি করে রাখুন, যেমন: Weight: 1 Kg) *</label>
+          <label>স্পেসিফিকেশন ও ফিচারসমূহ (প্রতি লাইনে একটি করে রাখুন) *</label>
           <textarea id="edit-p-specs" class="form-control" rows="4" required>${specString}</textarea>
         </div>
 
@@ -880,7 +927,7 @@ function openEditProductForm(id) {
     </div>
   `;
 
-  document.getElementById('edit-prod-submit-form').addEventListener('submit', function(e) {
+  document.getElementById('edit-prod-submit-form').addEventListener('submit', async function(e) {
     e.preventDefault();
 
     const rawSpecs = document.getElementById('edit-p-specs').value.split('\n');
@@ -901,17 +948,17 @@ function openEditProductForm(id) {
     item.description = document.getElementById('edit-p-desc').value;
     item.specs = parsedSpecs;
 
-    saveProductsToLocal();
-    alert("সাফল্যের সাথে প্রোডাক্টের তথ্য ও ইমেজ আপডেট করা হয়েছে।");
+    await saveProductsToCloud();
+    alert("সাফল্যের সাথে প্রোডাক্টের তথ্য ও ইমেজ ক্লাউডে আপডেট করা হয়েছে। এটি এখন গ্লোবালি সব ডিভাইসে কার্যকর হবে।");
     document.getElementById('product-edit-form-container').innerHTML = '';
     loadAdminProductsView();
   });
 }
 
-function deleteProduct(id) {
+async function deleteProduct(id) {
   if (confirm("আপনি কি নিশ্চিতভাবে এই প্রোডাক্টটি ডিলিট করতে চান?")) {
     products = products.filter(p => p.id !== id);
-    saveProductsToLocal();
+    await saveProductsToCloud();
     loadAdminProductsView();
   }
 }
