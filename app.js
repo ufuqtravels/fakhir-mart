@@ -50,12 +50,13 @@ async function initDatabase() {
   fetchLatestCloudData();
 }
 
-// Self-Healing Cloud Data Parser (যেকোনো ফরম্যাটের ডাটা নিজে সংশোধন করে নেবে)
+// Self-Healing Cloud Data Parser (যেকোনো ফরম্যাটের ডাটা নিজে সংশোধন করে নেবে এবং ডুয়াল হেডার পারমিশন ব্যবহার করবে)
 async function fetchLatestCloudData() {
   try {
     const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
       headers: {
-        'X-Master-Key': JSONBIN_API_KEY
+        'X-Master-Key': JSONBIN_API_KEY,
+        'X-Access-Key': JSONBIN_API_KEY // ডুয়াল হেডার পারমিশন সাপোর্ট
       }
     });
     const data = await response.json();
@@ -77,7 +78,7 @@ async function fetchLatestCloudData() {
   }
 }
 
-// Save Data (Products & Orders) to Cloud Database
+// Save Data (Products & Orders) to Cloud Database (ডুয়াল হেডার পারমিশন রাইট ব্লক আনলক করবে)
 async function saveCloudData() {
   try {
     const payload = { products, orders };
@@ -85,7 +86,8 @@ async function saveCloudData() {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        'X-Master-Key': JSONBIN_API_KEY
+        'X-Master-Key': JSONBIN_API_KEY,
+        'X-Access-Key': JSONBIN_API_KEY // ডুয়াল হেডার পারমিশন সাপোর্ট
       },
       body: JSON.stringify(payload)
     });
@@ -598,7 +600,7 @@ function selectPaymentMethod(method, el) {
   document.getElementById('selected-payment').value = method;
 }
 
-// Order placement with real-time Cloud sync to dashboard
+// Order placement with real-time Cloud sync to dashboard (Do not modify logic)
 async function processOrderPlacement(subtotal, delivery, total) {
   const name = document.getElementById('cust-name').value.trim();
   const phone = document.getElementById('cust-phone').value.trim();
@@ -619,14 +621,15 @@ async function processOrderPlacement(subtotal, delivery, total) {
     date: new Date().toLocaleDateString()
   };
 
-  // ডুপ্লিকেট ওভাররাইট এড়াতে ক্লাউড থেকে সর্বশেষ ডেটা সিঙ্ক করা হচ্ছে
   try {
     const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
-      headers: { 'X-Master-Key': JSONBIN_API_KEY }
+      headers: {
+        'X-Master-Key': JSONBIN_API_KEY,
+        'X-Access-Key': JSONBIN_API_KEY
+      }
     });
     const data = await response.json();
     if (data.record) {
-      // ক্লাউড ডেটা স্ট্রাকচার ডিটেকশন
       if (Array.isArray(data.record)) {
         products = data.record;
       } else {
@@ -638,7 +641,6 @@ async function processOrderPlacement(subtotal, delivery, total) {
     console.warn("Could not fetch latest orders before posting.", e);
   }
 
-  // অর্ডার পুশ করে গ্লোবাল ক্লাউড ডেটাবেজে সেভ করা হচ্ছে
   orders.push(newOrder);
   await saveCloudData();
   
