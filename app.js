@@ -6,34 +6,28 @@ let products = [];
 let cart = [];
 let orders = [];
 
-// Initialize Local/Cloud Database
+// Initialize Local/Cloud Database (Hybrid Fast Caching)
 async function initDatabase() {
+  // ১. কার্ট এবং অর্ডার লোকাল মেমোরি থেকে সাথে সাথে লোড হবে
   const localCart = localStorage.getItem('fm_cart');
-  if (localCart) {
-    cart = JSON.parse(localCart);
-  }
+  if (localCart) cart = JSON.parse(localCart);
 
   const localOrders = localStorage.getItem('fm_orders');
-  if (localOrders) {
-    orders = JSON.parse(localOrders);
-  } else {
-    orders = [
-      {
-        id: "FM-1090",
-        customer: { name: "Tanvir Hasan", phone: "01822788322", address: "Nababganj, Dhaka" },
-        items: [{ id: "anua-toner", name: "Anua Heartleaf 77% Soothing Toner", price: 1890, qty: 1 }],
-        subtotal: 1890,
-        delivery: 60,
-        total: 1950,
-        payment: "Cash On Delivery",
-        status: "pending",
-        date: new Date().toLocaleDateString()
-      }
-    ];
-    localStorage.setItem('fm_orders', JSON.stringify(orders));
+  if (localOrders) orders = JSON.parse(localOrders);
+
+  // ২. ক্যাশড প্রোডাক্ট লোকাল মেমোরি থেকে সাথে সাথে লোড হবে (0.05 সেকেন্ড স্পিড)
+  const cachedProducts = localStorage.getItem('fm_products_cache');
+  if (cachedProducts) {
+    products = JSON.parse(cachedProducts);
+  } else if (typeof INITIAL_PRODUCTS !== 'undefined') {
+    products = [...INITIAL_PRODUCTS]; // প্রথমবার ঢোকার জন্য ব্যাকআপ ফাইল
   }
 
-  // Load Products from Cloud Database (Real-time Sync)
+  // ৩. ক্লাউডের জন্য অপেক্ষা না করে সাইট সাথে সাথে রেন্ডার হবে (No Loading Spinner Delay)
+  updateGlobalCartCounters();
+  router();
+
+  // ৪. ব্যাকগ্রাউন্ডে ক্লাউড থেকে লেটেস্ট ডাটা চেক হবে (ব্যবহারকারীর অজান্তেই)
   try {
     const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
       headers: {
@@ -41,16 +35,20 @@ async function initDatabase() {
       }
     });
     const data = await response.json();
-    products = data.record;
-  } catch (error) {
-    console.warn("Cloud Database load failed, using fallback static data.", error);
-    if (typeof INITIAL_PRODUCTS !== 'undefined') {
-      products = [...INITIAL_PRODUCTS];
+    if (data.record) {
+      products = data.record;
+      // পরবর্তী ভিজিটের স্পিড বাড়ানোর জন্য লোকাল ক্যাশে সেভ হবে
+      localStorage.setItem('fm_products_cache', JSON.stringify(products));
+      
+      // যদি স্ক্রিনে কোনো নতুন পণ্য যোগ হয়ে থাকে, তবে তা রিলোড ছাড়াই নীরবে আপডেট হবে
+      const hash = window.location.hash || '#/';
+      if (hash === '#/' || hash.startsWith('#/products') || hash.startsWith('#/product/')) {
+        router();
+      }
     }
+  } catch (error) {
+    console.warn("Background Cloud Database load failed. Using cached data.", error);
   }
-
-  updateGlobalCartCounters();
-  router();
 }
 
 // Save Products to Cloud Database (Sync across all devices)
@@ -64,6 +62,8 @@ async function saveProductsToCloud() {
       },
       body: JSON.stringify(products)
     });
+    // ক্লাউড আপডেটের পর লোকাল ক্যাশও আপডেট করুন
+    localStorage.setItem('fm_products_cache', JSON.stringify(products));
     console.log("Database successfully synced to cloud.");
   } catch (error) {
     console.error("Cloud sync failed.", error);
