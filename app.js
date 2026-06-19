@@ -8,26 +8,28 @@ let orders = [];
 
 // Initialize Local/Cloud Database (Hybrid Fast Caching)
 async function initDatabase() {
-  // ১. কার্ট এবং অর্ডার লোকাল মেমোরি থেকে সাথে সাথে লোড হবে
+  // ১. কার্ট স্থানীয় ব্রাউজার মেমোরি থেকে সাথে সাথে লোড হবে
   const localCart = localStorage.getItem('fm_cart');
   if (localCart) cart = JSON.parse(localCart);
 
-  const localOrders = localStorage.getItem('fm_orders');
-  if (localOrders) orders = JSON.parse(localOrders);
-
-  // ২. ক্যাশড প্রোডাক্ট লোকাল মেমোরি থেকে সাথে সাথে লোড হবে (0.05 সেকেন্ড স্পিড)
-  const cachedProducts = localStorage.getItem('fm_products_cache');
-  if (cachedProducts) {
-    products = JSON.parse(cachedProducts);
+  // ২. ক্যাশ থেকে প্রোডাক্ট ও অর্ডার দ্রুত স্ক্রিনে লোড হবে (0.05s Speed)
+  const cachedData = localStorage.getItem('fm_cloud_cache');
+  if (cachedData) {
+    const parsed = JSON.parse(cachedData);
+    products = parsed.products || [];
+    orders = parsed.orders || [];
   } else if (typeof INITIAL_PRODUCTS !== 'undefined') {
-    products = [...INITIAL_PRODUCTS]; // প্রথমবার ঢোকার জন্য ব্যাকআপ ফাইল
+    products = [...INITIAL_PRODUCTS];
   }
 
-  // ৩. ক্লাউডের জন্য অপেক্ষা না করে সাইট সাথে সাথে রেন্ডার হবে (No Loading Spinner Delay)
   updateGlobalCartCounters();
   router();
 
-  // ৪. ব্যাকগ্রাউন্ডে ক্লাউড থেকে লেটেস্ট ডাটা চেক হবে (ব্যবহারকারীর অজান্তেই)
+  // ৩. ব্যাকগ্রাউন্ডে ক্লাউড থেকে রিয়েল-টাইমে অর্ডার ও প্রোডাক্ট সিঙ্ক হবে
+  await fetchLatestCloudData();
+}
+
+async function fetchLatestCloudData() {
   try {
     const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
       headers: {
@@ -36,13 +38,15 @@ async function initDatabase() {
     });
     const data = await response.json();
     if (data.record) {
-      products = data.record;
-      // পরবর্তী ভিজিটের স্পিড বাড়ানোর জন্য লোকাল ক্যাশে সেভ হবে
-      localStorage.setItem('fm_products_cache', JSON.stringify(products));
+      products = data.record.products || [];
+      orders = data.record.orders || [];
       
-      // যদি স্ক্রিনে কোনো নতুন পণ্য যোগ হয়ে থাকে, তবে তা রিলোড ছাড়াই নীরবে আপডেট হবে
+      // লোকাল ক্যাশ আপডেট করা হচ্ছে
+      localStorage.setItem('fm_cloud_cache', JSON.stringify({ products, orders }));
+      
+      // রিলোড ছাড়া পেজের ইন্টারফেস রেন্ডার করা হচ্ছে
       const hash = window.location.hash || '#/';
-      if (hash === '#/' || hash.startsWith('#/products') || hash.startsWith('#/product/')) {
+      if (hash === '#/' || hash.startsWith('#/products') || hash.startsWith('#/product/') || hash === '#/admin') {
         router();
       }
     }
@@ -51,20 +55,20 @@ async function initDatabase() {
   }
 }
 
-// Save Products to Cloud Database (Sync across all devices)
-async function saveProductsToCloud() {
+// Save Data (Products & Orders) to Cloud Database
+async function saveCloudData() {
   try {
+    const payload = { products, orders };
     await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
         'X-Master-Key': JSONBIN_API_KEY
       },
-      body: JSON.stringify(products)
+      body: JSON.stringify(payload)
     });
-    // ক্লাউড আপডেটের পর লোকাল ক্যাশও আপডেট করুন
-    localStorage.setItem('fm_products_cache', JSON.stringify(products));
-    console.log("Database successfully synced to cloud.");
+    localStorage.setItem('fm_cloud_cache', JSON.stringify(payload));
+    console.log("Cloud synced successfully.");
   } catch (error) {
     console.error("Cloud sync failed.", error);
   }
@@ -73,10 +77,6 @@ async function saveProductsToCloud() {
 function saveCartToLocal() {
   localStorage.setItem('fm_cart', JSON.stringify(cart));
   updateGlobalCartCounters();
-}
-
-function saveOrdersToLocal() {
-  localStorage.setItem('fm_orders', JSON.stringify(orders));
 }
 
 function updateGlobalCartCounters() {
@@ -361,7 +361,6 @@ function addCurrentProductToCartWithQty(id, qty) {
   alert("সাফল্যের সাথে কার্টে যুক্ত হয়েছে।");
 }
 
-// Shopping Cart Code
 function addToCart(id, qty) {
   const product = products.find(p => p.id === id);
   if (!product) return;
@@ -557,6 +556,15 @@ function renderCheckout(target) {
 
   document.getElementById('order-submit-form').addEventListener('submit', function(e) {
     e.preventDefault();
+    
+    const phoneInput = document.getElementById('cust-phone').value.trim();
+    const cleanPhone = phoneInput.replace(/[\s\-\+]/g, '');
+    
+    if (cleanPhone.length < 11 || cleanPhone.length > 13) {
+      alert("দুঃখিত, অনুগ্রহ করে একটি সঠিক মোবাইল নাম্বার প্রদান করুন (যেমন: 01822788322)");
+      return;
+    }
+    
     processOrderPlacement(subtotal, delivery, total);
   });
 }
@@ -567,7 +575,8 @@ function selectPaymentMethod(method, el) {
   document.getElementById('selected-payment').value = method;
 }
 
-function processOrderPlacement(subtotal, delivery, total) {
+// Order placement with real-time Cloud sync to dashboard
+async function processOrderPlacement(subtotal, delivery, total) {
   const name = document.getElementById('cust-name').value.trim();
   const phone = document.getElementById('cust-phone').value.trim();
   const address = document.getElementById('cust-address').value.trim();
@@ -587,8 +596,24 @@ function processOrderPlacement(subtotal, delivery, total) {
     date: new Date().toLocaleDateString()
   };
 
+  // অর্ডার করার সময় ড্যাশবোর্ড ওভাররাইট হওয়া এড়াতে ক্লাউড থেকে সর্বশেষ ডেটা আগে নামিয়ে নেওয়া হবে
+  try {
+    const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
+      headers: { 'X-Master-Key': JSONBIN_API_KEY }
+    });
+    const data = await response.json();
+    if (data.record) {
+      products = data.record.products || [];
+      orders = data.record.orders || [];
+    }
+  } catch (e) {
+    console.warn("Could not fetch latest orders before posting.", e);
+  }
+
+  // নতুন অর্ডার অ্যারেতে পুশ করে সিঙ্ক করা হচ্ছে
   orders.push(newOrder);
-  saveOrdersToLocal();
+  await saveCloudData();
+  
   cart = [];
   saveCartToLocal();
 
@@ -622,7 +647,6 @@ function renderStaticPage(target, page) {
   } else if (page === 'Contact') {
     content = `
       <h2>যোগাযোগ করুন</h2>
-      <p>আপনার যেকোনো প্রশ্ন বা জিজ্ঞাসায় সরাসরি আমাদের সাপোর্ট টিমে যোগাযোগ করুন।</p>
       <div style="margin-top:20px;">
         <p><strong><i class="fa-solid fa-location-dot"></i> ঠিকানা:</strong> Nababganj, Dhaka, Bangladesh</p>
         <p><strong><i class="fa-solid fa-phone"></i> ফোন ও হোয়াটসঅ্যাপ:</strong> 01822788322</p>
@@ -697,11 +721,11 @@ function renderAdminLogin(target) {
         <form id="admin-login-form">
           <div class="form-group">
             <label>এডমিন আইডি (Email)</label>
-            <input type="text" id="admin-username" class="form-control" required value="admin@fakhirmart.com">
+            <input type="text" id="admin-username" class="form-control" required value="fakhir.mart@gmail.com">
           </div>
           <div class="form-group">
             <label>পাসওয়ার্ড</label>
-            <input type="password" id="admin-password" class="form-control" required placeholder="••••••••">
+            <input type="password" id="admin-password" class="form-control" required placeholder="••••••••" value="fakhir123">
           </div>
           <button type="submit" class="btn-royal btn-block mt-3">লগইন করুন</button>
         </form>
@@ -714,7 +738,7 @@ function renderAdminLogin(target) {
     const user = document.getElementById('admin-username').value;
     const pass = document.getElementById('admin-password').value;
 
-    if (user === 'admin@fakhirmart.com' && pass === 'fakhir123') {
+    if (user === 'fakhir.mart@gmail.com' && pass === 'fakhir123') {
       sessionStorage.setItem('fm_admin_logged', 'true');
       router();
     } else {
@@ -866,7 +890,7 @@ function openAddProductModal() {
     };
 
     products.push(newProd);
-    await saveProductsToCloud();
+    await saveCloudData();
     loadAdminProductsView();
   });
 }
@@ -948,7 +972,7 @@ function openEditProductForm(id) {
     item.description = document.getElementById('edit-p-desc').value;
     item.specs = parsedSpecs;
 
-    await saveProductsToCloud();
+    await saveCloudData();
     alert("সাফল্যের সাথে প্রোডাক্টের তথ্য ও ইমেজ ক্লাউডে আপডেট করা হয়েছে। এটি এখন গ্লোবালি সব ডিভাইসে কার্যকর হবে।");
     document.getElementById('product-edit-form-container').innerHTML = '';
     loadAdminProductsView();
@@ -958,7 +982,7 @@ function openEditProductForm(id) {
 async function deleteProduct(id) {
   if (confirm("আপনি কি নিশ্চিতভাবে এই প্রোডাক্টটি ডিলিট করতে চান?")) {
     products = products.filter(p => p.id !== id);
-    await saveProductsToCloud();
+    await saveCloudData();
     loadAdminProductsView();
   }
 }
@@ -1010,12 +1034,12 @@ function loadAdminOrdersView() {
   `;
 }
 
-function updateOrderStatus(id, newStatus) {
+async function updateOrderStatus(id, newStatus) {
   const order = orders.find(o => o.id === id);
   if (order) {
     order.status = newStatus;
-    saveOrdersToLocal();
-    alert("অর্ডারের স্টেটাস আপডেট করা হয়েছে।");
+    await saveCloudData(); // অর্ডারের স্ট্যাটাস ক্লাউডেও সিঙ্ক হবে!
+    alert("অর্ডারের স্টেটাস গ্লোবালি আপডেট করা হয়েছে।");
     loadAdminOrdersView();
   }
 }
